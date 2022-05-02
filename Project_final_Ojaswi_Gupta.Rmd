@@ -1,0 +1,386 @@
+---
+title: "PROJECT"
+Author: Ojaswi Gupta
+output: html_notebook
+---
+
+```{r}
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(tidyverse)
+library(quantmod)
+library(TTR)
+library(plotly)
+library(PerformanceAnalytics)
+```
+
+```{r}
+origwd <- getwd()
+print(origwd)
+
+start <- Sys.time()
+corepath <-"/Users/ojaswigupta/Desktop/coursework/sem2/Inro to DS with R/Intro to DS with R Project/"
+setwd(corepath)
+```
+
+loading the dataset with ESG data. change the path to 
+```{r}
+load(paste0(corepath,"data_esg.RData"))
+```
+
+There are 6 attributes:      
+- closing price (**Close**),     
+- past (realized) 1 month volatility (**Vol_1M**),     
+- market capitalisation in M$ (**Mkt_Cap**),     
+- price-to-book ratio (**P2B**),     
+- debt-to-equity (**D2E**),    
+- ESG ranking (**ESG_rank** from Sustainalytics, in %).
+
+To modify the dataset, separating individual values for each stock, with all stocks aligned horizontally.
+
+```{r}
+Column_headers<-colnames(data_esg)
+attribute_list<- Column_headers[3:8]
+attribute_list
+```
+
+Convert the data from stacked on top of each other to horizontally aligned by Tick for every value type.
+
+```{r}
+for (i in attribute_list){
+    df<-pivot_wider(data_esg[,c("Tick","Date",i)],names_from="Tick", values_from=i)
+    assign(paste('data_',i,sep=''),df)
+}
+Tick<-unique(data_esg$Tick)
+```
+
+Filter out the stocks with a high ESG rating. The threshold here is 75.
+Filter by ESG and use it.
+```{r}
+ESG_signal<-c() #call it signal 
+ESG_signal <- data_ESG_rank
+stock_filter1<-c()
+stock_filter1 <- data_Close
+
+for (i in 1:nrow(data_ESG_rank)){
+  for (j in 2:ncol(data_ESG_rank)){
+    if (data_ESG_rank [i,j]>75){
+    ESG_signal[i,j]<-1
+    }
+    else {ESG_signal[i,j]<-0}
+    stock_filter1[i,j]<-ESG_signal[i,j]
+    }
+}
+tail(stock_filter1)
+```
+
+EMA 7 months and 2 months to mimic the 150 day and 50 day moving average. 
+```{r}
+Mov_Avg1<-c()
+Mov_Avg2<-c()
+for (i in Tick){
+  EMA_7<-data.table(EMA(data_Close[i],n=7))
+  EMA_7<-bind_cols(EMA_7)
+  
+  Mov_Avg1<-cbind(Mov_Avg1,EMA_7)
+  
+  EMA_2<-data.table(EMA(data_Close[i],n=2))
+  EMA_2<-bind_cols(EMA_2)
+  
+  Mov_Avg2<-cbind(Mov_Avg2,EMA_2)
+}
+colnames(Mov_Avg1)=Tick
+Mov_Avg1<-cbind(data_Close$Date,Mov_Avg1)
+colnames(Mov_Avg1)[1]="Date"
+
+colnames(Mov_Avg2)=Tick
+Mov_Avg2<-cbind(data_Close$Date,Mov_Avg2)
+colnames(Mov_Avg2)[1]="Date"
+
+EMA_diff<-Mov_Avg2[,2:ncol(Mov_Avg2)]-Mov_Avg1[,2:ncol(Mov_Avg1)]
+EMA_diff<-cbind(data_Close$Date,EMA_diff)
+colnames(EMA_diff)[1]="Date"
+EMA_diff[is.na(EMA_diff)]<-0
+
+class(EMA_diff)<-class(as.data.frame(EMA_diff))
+```
+
+Using the EMA to create signal. Whenever, the 2 month EMA crosses the 7 month EMA we set thesigna l as 1 (Buy). When they are equal or 7 month EMA is greater, we set the signal at 0 (Sell)
+```{r}
+EMA_signal<-c()
+EMA_signal <- EMA_diff
+stock_filter2<-c()
+stock_filter2 <- data_Close
+for (i in 1:nrow(EMA_diff)){
+  for (j in 2:ncol(EMA_diff)){
+    if (EMA_diff [i,j]<0){
+    EMA_signal[i,j]<-0
+    }
+    else {EMA_signal[i,j]<-1}
+    stock_filter2[i,j]<- EMA_signal[i,j]
+    }
+}
+tail(stock_filter2)
+```
+
+Rate of change for stocks to be calculated. using rate of change as a sell signal with the condition of booking profits when it is more than 15%. This is and attempt to eliminate the high volatility stocks.
+
+```{r}
+rate_of_change<-c()
+for (i in Tick){
+ roc<-data.table(ROC(data_Close[i],n=2))
+  roc<-bind_cols(roc)
+  
+  rate_of_change<-cbind(rate_of_change,roc)
+}
+colnames(rate_of_change)=Tick
+rate_of_change<-cbind(data_Close$Date,rate_of_change)
+colnames(rate_of_change)[1]="Date"
+rate_of_change[is.na(rate_of_change)]<-0
+class(rate_of_change)<-class(as.data.frame(rate_of_change))
+
+roc_signal<-c()
+roc_signal <- EMA_diff
+stock_filter3<-c()
+stock_filter3 <- data_Close
+for (i in 1:nrow(rate_of_change)){
+  for (j in 2:ncol(rate_of_change)){
+    if (rate_of_change [i,j]>.15 & rate_of_change [i,j]< -.15){
+    roc_signal[i,j]<-0
+    }
+    else {roc_signal[i,j]<-1}
+    stock_filter3[i,j]<-roc_signal[i,j]
+    }
+}
+tail(stock_filter3)
+```
+
+Using RSI as an indicator for selling off the stocks continuously underperforming the market. Whenever RSI is below 
+
+```{r}
+RSI<-c()
+
+for (i in Tick){
+  rsi<- data.table(RSI(data_Close[i]))
+  RSI<-cbind(RSI,rsi)
+}
+colnames(RSI)=Tick
+RSI<-cbind(data_Close$Date,RSI)
+colnames(RSI)[1]="Date"
+
+RSI[is.na(RSI)]<-50
+
+class(RSI)<-class(as.data.frame(RSI))
+
+RSI_filter<-c()
+RSI_filter <- RSI
+stock_filter4<-c()
+stock_filter4 <- data_Close
+
+for (i in 1:nrow(RSI)){
+  for (j in 2:ncol(RSI)){
+    if (RSI [i,j]<35 & RSI [i,j]>85){
+    RSI_filter[i,j]<-0
+    }
+    else {RSI_filter[i,j]<-1}
+    stock_filter4[i,j]<- RSI_filter[i,j]
+    }
+}
+
+tail(stock_filter4)
+```
+
+
+```{r}
+Bollinger_band<-data.frame()
+n<-1
+for (i in Tick){
+  bband<- data.table(BBands(data_Close[i]),n=10,sd=2)
+  if(n==1){
+    Bollinger_band<-bband$pctB
+  }
+  else{
+  Bollinger_band<-cbind(Bollinger_band,bband$pctB)  
+  }
+  n<-2
+}
+Bollinger_band <-as.data.frame(Bollinger_band)
+colnames(Bollinger_band)=Tick
+Bollinger_band<-cbind(data_Close$Date,Bollinger_band)
+colnames(Bollinger_band)[1]="Date"
+
+Bollinger_band[is.na(Bollinger_band)]<-0
+
+Bollinger_filter<-c()
+Bollinger_filter<- RSI_filter
+stock_filter5<-c()
+stock_filter5 <- data_Close
+
+class(Bollinger_filter)<-class(as.data.frame(Bollinger_filter))
+
+for (i in 1:nrow(Bollinger_band)){
+  for (j in 2:ncol(Bollinger_band)){
+    if (Bollinger_band [i,j]>1){
+    Bollinger_filter[i,j]<-0
+    }
+    else {Bollinger_filter[i,j]<-1}
+    stock_filter5[i,j]<- Bollinger_filter[i,j]
+    }
+}
+tail(stock_filter5)
+```
+
+Create a Trade signal using all the filters estimated above.
+
+```{r}
+Trade_signal<-data_Close[,2:ncol(data_Close)]*
+stock_filter1[,2:ncol(stock_filter1)]*
+stock_filter2[,2:ncol(stock_filter2)]*
+stock_filter3[,2:ncol(stock_filter3)]*
+stock_filter4[,2:ncol(stock_filter4)]*
+stock_filter5[,2:ncol(stock_filter5)]
+
+Trade_signal<-cbind(data_Close$Date,Trade_signal)
+colnames(Trade_signal)[1]="Date"
+tail(Trade_signal)
+```
+
+
+This part of code enables the buyiung and selling of stocks based on the above calculated filters. 
+The way we proceed here is as follows:
+-Take the initial investment amount and divide it equally among all eligible stocks at T1.
+-square off the posiitons at T2 and then again redistribute the new capital among the eligible stocks at T2.
+-repeat the process until the end of time series of data.
+
+```{r}
+Money<-1000000
+Temp<-1
+Test<-data.frame()
+share_price_quantity<-data.frame("price"=0,"shares"=0,"i"=0,"j"=0)
+
+for (i in 1:nrow(Trade_signal)){
+  to_buy<-0
+if (Temp!=1){
+  for (k in 2:nrow(share_price_quantity)){
+      Money<-Money+(data_Close[i,share_price_quantity[k,4]])*share_price_quantity[k,2] 
+  }
+}
+  Test<-append(Test,c(Money))
+  share_price_quantity<-data.frame("price"=0,"shares"=0,"i"=0,"j"=0)
+  #to count the number of unique shares to be bought
+  for (j in 2:ncol(Trade_signal)){
+    if (Trade_signal[i,j]!=0){
+      to_buy<-to_buy+1
+    }
+  }
+  if(to_buy==0){next}
+#money available for each unique company share to buy them
+Moneyps<-Money/to_buy
+  for (j in 2:ncol(Trade_signal)){
+    if (Trade_signal[i,j]!=0){
+      price<-Trade_signal[i,j]
+      shares<-Moneyps/Trade_signal[i,j]
+      share_price_quantity[nrow(share_price_quantity)+1,]=c(price,shares,i,j)
+      Money<-Money-shares*price
+}
+}
+  Temp<-2
+}
+```
+
+```{r}
+Final_result<-c()
+Final_result<-do.call(rbind.data.frame, Test)
+Final_result<-cbind(data_Close$Date,Final_result)
+colnames(Final_result)[1]="Date"
+colnames(Final_result)[2]="Money_pf"
+Final_result<-cbind(Final_result,100*ROC(Final_result$Money_pf,n=1,type="discrete"))
+colnames(Final_result)[3]="Return_pf"
+Final_result<-drop_na(Final_result)
+tail(Final_result)
+```
+
+Summary statistics for total data without any filters and with an equally weighted portfolio.
+Calculating the monthly returns and overall growth of the investment.
+
+```{r}
+Money_pf<-1000000  #million dollars to begin with
+Money_ewpf<-Money_pf/(ncol(data_Close)-1)
+weight<-c()
+portfolio_ew<-c()
+for (i in 2:ncol(data_Close)){
+  w<-Money_ewpf/data_Close[1,i]
+  weight<-bind_cols(weight,w)
+}
+colnames(weight)=Tick
+weight<-cbind(data_Close$Date,weight)
+colnames(weight)[1]="Date"
+
+portfolio_ew<-weight[,2:383]*data_Close[,2:383]
+total<-as.data.frame(rowSums(portfolio_ew[,1:382]))
+total<-cbind(data_Close$Date,total)
+colnames(total)[1]="Date"
+colnames(total)[2]="Money_ew"
+total<-cbind(total,100*ROC(total$Money_ew,n=1,type="discrete"))
+colnames(total)[3]="Return_ew"
+total<-drop_na(total)
+```
+
+Comparison of equally weighted and filtered portfolios.
+
+```{r}
+Comparison<-data.frame()
+Comparison<-total
+Comparison<-cbind(Comparison,Final_result[,2:3])
+tail(Comparison)
+```
+
+
+```{r}
+plot1<-ggplot(Comparison, aes(x=Date)) + 
+  geom_line(aes(y = Money_ew), color = "maroon", linetype="dotted") + 
+  geom_line(aes(y = Money_pf), color="steelblue") +
+  ylab("Total Investment")
+# Turn it interactive with ggplotly
+plot1 <- ggplotly(plot1)
+plot1
+```
+
+```{r}
+plot2<-ggplot(Comparison, aes(x=Date)) + 
+  geom_line(aes(y = Return_ew), color = "maroon", linetype="dotted") + 
+  geom_line(aes(y = Return_pf), color="steelblue") +
+  ylab("Monthly Returns (%)")
+# Turn it interactive with ggplotly
+plot2 <- ggplotly(plot2)
+plot2
+```
+
+Comparison statistics:
+```{r}
+vol_ew <- sd(Comparison$Return_ew) * sqrt(12)
+vol_pf <- sd(Comparison$Return_pf) * sqrt(12)
+StDev_ew<- sd(Comparison$Return_ew)
+StDev_pf<- sd(Comparison$Return_pf)
+
+returns_ew<-xts(Comparison$Return_ew,order.by=as.Date(Comparison$Date))
+colnames(returns_ew)<-"returns_ew"
+returns_pf<-xts(Comparison$Return_pf,order.by=as.Date(Comparison$Date))
+colnames(returns_pf)<-"returns_pf"
+
+Sharpe_ew<-SharpeRatio(returns_ew,Rf=0.002,FUN='StdDev')*sqrt(12)
+Sharpe_pf<-SharpeRatio(returns_pf,Rf=0.002,FUN='StdDev')*sqrt(12)
+
+Results<- data.frame("Portfolio" = c("Benchmark","Managed"), "Sharpe_Ratio" = c(Sharpe_ew,Sharpe_pf), "St_Dev" = c(StDev_ew,StDev_pf),"Volatility" = c(vol_ew,vol_pf),"net_percent_Ret" = c(100*((Comparison[84,2]/1000000)-1),100*((Comparison[84,4]/1000000)-1)))
+print(Results)
+
+```
+
+
+```{r}
+end <- Sys.time()
+runtime<- end-start
+runtime
+```
